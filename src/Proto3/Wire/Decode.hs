@@ -92,8 +92,9 @@ import           Data.Serialize.Get      ( Get, getWord8, getInt32le
                                          , getInt64le, getWord32le, getWord64le
                                          , runGet )
 import           Data.Serialize.IEEE754  ( getFloat32le, getFloat64le )
+import qualified Data.Text               as TS
 import           Data.Text.Lazy          ( Text, pack )
-import           Data.Text.Lazy.Encoding ( decodeUtf8' )
+import           Data.Text.Encoding      ( decodeUtf8' )
 import qualified Data.Traversable        as T
 import           Data.Int                ( Int32, Int64 )
 import           Data.Word               ( Word8, Word32, Word64 )
@@ -394,14 +395,14 @@ lazyByteString :: Parser RawPrimitive BL.ByteString
 lazyByteString = fmap BL.fromStrict bytes
 
 -- | Parse a primitive with the @bytes@ wire type as 'Text'.
-text :: Parser RawPrimitive Text
+text :: Parser RawPrimitive TS.Text
 text = Parser $
     \case
         LengthDelimitedField bs ->
-            case decodeUtf8' $ BL.fromStrict bs of
+            case decodeUtf8' bs of
                 Left err -> Left (BinaryError (pack ("Failed to decode UTF-8: " ++
                                                          show err)))
-                Right txt -> return txt
+                Right txt -> pure txt
         wrong -> throwWireTypeError "string" wrong
 
 -- | Parse a primitive with an enumerated type.
