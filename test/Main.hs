@@ -43,22 +43,24 @@ import qualified Proto3.Wire.Reverse   as Reverse
 import qualified Proto3.Wire.Encode    as Encode
 import qualified Proto3.Wire.Decode    as Decode
 
-import qualified Test.DocTest
 import           Test.QuickCheck       ( (===), Arbitrary )
 import           Test.Tasty
 import qualified Test.Tasty.HUnit      as HU
 import qualified Test.Tasty.QuickCheck as QC
 
+import           Build_doctests
+import qualified Test.DocTest
+
 main :: IO ()
 main = do
-    Test.DocTest.doctest
+    Test.DocTest.doctest $
       [ "-isrc"
       , "-fobject-code"
       , "src/Proto3/Wire/Builder.hs"
       , "src/Proto3/Wire/Reverse.hs"
       , "src/Proto3/Wire/Encode.hs"
       , "src/Proto3/Wire/Decode.hs"
-      ]
+      ] <> flags <> pkgs
     defaultMain tests
 
 tests :: TestTree
