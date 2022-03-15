@@ -38,10 +38,8 @@
 -- > 1 `strings` Just "some string" <>
 -- > 2 `strings` [ "foo", "bar", "baz" ]
 
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -49,6 +47,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Proto3.Wire.Encode
     ( -- * `MessageBuilder` type
@@ -57,6 +56,7 @@ module Proto3.Wire.Encode
     , vectorMessageBuilder
     , messageLength
     , toLazyByteString
+    , toByteString
     , unsafeFromLazyByteString
 
       -- * Standard Integers
@@ -171,6 +171,9 @@ messageLength = fromIntegral . fst . RB.runBuildR . unMessageBuilder
 -- | Convert a message to a lazy `BL.ByteString`
 toLazyByteString :: MessageBuilder -> BL.ByteString
 toLazyByteString = RB.toLazyByteString . unMessageBuilder
+
+toByteString :: MessageBuilder -> B.ByteString
+toByteString = RB.toByteString . unMessageBuilder
 
 -- | This lets you cast an arbitrary `ByteString` to a `MessageBuilder`, whether
 -- or not the `ByteString` corresponds to a valid serialized protobuf message

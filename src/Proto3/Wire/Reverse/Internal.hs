@@ -30,6 +30,7 @@ module Proto3.Wire.Reverse.Internal
     , fromBuildR
     , etaBuildR
     , runBuildR
+    , runBuildRStrict
     , withUnused
     , withTotal
     , withLengthOf
@@ -480,6 +481,9 @@ runBuildR f = unsafePerformIO $ do
     (v1, u1) <- fromBuildR f v0 u0
     SealedState { sealedSB = bytes, totalSB = total } <- sealBuffer v1 u1
     pure (total, bytes)
+
+runBuildRStrict :: BuildR -> (Int, B.ByteString)
+runBuildRStrict f = (\(x, y) -> (x, BL.toStrict y)) (runBuildR f)
 
 -- | First reads the number of unused bytes in the current buffer.
 withUnused :: (Int -> BuildR) -> BuildR
