@@ -74,6 +74,7 @@ module Proto3.Wire.Reverse
     -- * Consume `BuildR`s
     , runBuildR
     , toLazyByteString
+    , toByteString
 
     -- * Helpful combinators
     , foldlRVector
@@ -116,6 +117,9 @@ import qualified Proto3.Wire.Reverse.Prim      as Prim
 -- "ABC"
 toLazyByteString :: BuildR -> BL.ByteString
 toLazyByteString = snd . runBuildR
+
+toByteString :: BuildR -> B.ByteString
+toByteString = snd . runBuildRStrict
 
 -- | Convert a strict `B.ByteString` to a `BuildR`
 --
