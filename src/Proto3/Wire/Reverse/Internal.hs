@@ -222,6 +222,11 @@ data BuildRState = BuildRState
       -- But to avoid redundant evaluation we do not mark it strict.
   }
 
+data BuildRStateStrict = BuildRStateStrict {
+  currentBuffer' :: {-# UNPACK #-}!(P.MutableByteArray RealWorld),
+  sealedBuffers' :: B.ByteString
+}
+
 -- | Allocates fields backward from offset 0 relative to some hypothetical
 -- address, yielding the total size and alignment requirements, respectively,
 -- along with the monadic return value.  The total size includes any padding
@@ -281,6 +286,9 @@ readState m = castPtrToStablePtr <$> peekByteOff m stateOffset
 
 writeState :: Ptr MetaData -> StablePtr (IORef BuildRState) -> IO ()
 writeState m = pokeByteOff m stateOffset . castStablePtrToPtr
+
+writeState' :: Ptr MetaData -> StablePtr (IORef BuildRStateStrict) -> IO ()
+writeState' m = pokeByteOff m stateOffset . castStablePtrToPtr
 
 readSpace :: Ptr MetaData -> IO Int
 readSpace m = peekByteOff m spaceOffset
@@ -351,6 +359,14 @@ newBuffer sealed (I# total) (IORef (STRef stateVar)) (StablePtr stateSP)
     case newBuffer# sealed total stateVar stateSP unused s0 of
       (# s1, addr #) -> (# s1, Ptr addr #)
 
+newBufferStrict :: B.ByteString -> Int -> IORef BuildRStateStrict
+                -> StablePtr (IORef BuildRStateStrict) -> Int
+                -> IO (Ptr Word8)
+newBufferStrict sealed (I# total) (IORef (STRef stateVar)) (StablePtr stateSP) (I# unused) = do
+  IO $ \s0 ->
+    case newBufferStrict# sealed total stateVar stateSP unused s0 of
+      (# s1, addr #) -> (# s1, Ptr addr #)
+
 newBuffer# ::
   BL.ByteString ->
   Int# ->
@@ -372,6 +388,30 @@ newBuffer# sealed total stateVar stateSP unused s0 =
       writeState m (StablePtr stateSP)
       writeSpace m (I# unused + I# total)
       let !nextState = BuildRState{currentBuffer = buf, sealedBuffers = sealed}
+      writeIORef (IORef (STRef stateVar)) nextState
+      pure v
+
+newBufferStrict# ::
+  B.ByteString ->
+  Int# ->
+  MutVar# RealWorld BuildRStateStrict ->
+  StablePtr# (IORef BuildRStateStrict) ->
+  Int# ->
+  State# RealWorld ->
+  (# State# RealWorld, Addr# #)
+newBufferStrict# sealed total stateVar stateSP unused s0 =
+    case go s0 of
+      (# s1, Ptr addr #) -> (# s1, addr #)
+  where
+    IO go = do
+      let allocation = metaDataSize + I# unused
+      buf <- P.newAlignedPinnedByteArray allocation metaDataAlign
+      let !(PTR base) = P.mutableByteArrayContents buf
+          !v = plusPtr (Ptr base) (metaDataSize + I# unused)
+          !m = plusPtr (Ptr base) metaDataSize
+      writeState' m (StablePtr stateSP)
+      writeSpace m (I# unused + I# total)
+      let !nextState = BuildRStateStrict{currentBuffer' = buf, sealedBuffers' = sealed}
       writeIORef (IORef (STRef stateVar)) nextState
       pure v
 
@@ -483,7 +523,14 @@ runBuildR f = unsafePerformIO $ do
     pure (total, bytes)
 
 runBuildRStrict :: BuildR -> (Int, B.ByteString)
-runBuildRStrict f = (\(x, y) -> (x, BL.toStrict y)) (runBuildR f)
+runBuildRStrict f = unsafePerformIO $ do
+  stateVar <- newIORef undefined
+  bracket (newStablePtr stateVar) freeStablePtr $ \statePtr -> do
+    let u0 = smallChunkSize
+    v0 <- newBufferStrict B.empty 0 stateVar statePtr u0
+    (v1, u1) <- fromBuildR f v0 u0
+    SealedState { sealedSB = bytes, totalSB = total } <- sealBuffer v1 u1
+    pure (total, BL.toStrict bytes)
 
 -- | First reads the number of unused bytes in the current buffer.
 withUnused :: (Int -> BuildR) -> BuildR
@@ -491,7 +538,7 @@ withUnused f = toBuildR $ \v u -> fromBuildR (f u) v u
 
 -- | First reads the number of bytes previously written.
 withTotal :: (Int -> BuildR) -> BuildR
-withTotal f = withTotal# (\total -> f (I# total))
+withTotal f = withTotal# $ \total -> f (I# total)
 
 -- | First reads the number of bytes previously written.
 withTotal# :: (Int# -> BuildR) -> BuildR
@@ -685,7 +732,7 @@ prependReverseChunks# v0 u0 s0 ad ct off len cs0 = go v0 u0 s0
 -- | Ensures that the current buffer has at least the given
 -- number of bytes before executing the given builder.
 ensure :: Int -> BuildR -> BuildR
-ensure (I# required) f = ensure# required f
+ensure (I# required) = ensure# required
 
 ensure# :: Int# -> BuildR -> BuildR
 ensure# required (BuildR f) = BuildR $ \v u s ->
