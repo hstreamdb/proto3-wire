@@ -284,6 +284,9 @@ metaPtr v = plusPtr v . negate
 readState :: Ptr MetaData -> IO (StablePtr (IORef BuildRState))
 readState m = castPtrToStablePtr <$> peekByteOff m stateOffset
 
+readStateStrict :: Ptr MetaData -> IO (StablePtr (IORef BuildRStateStrict))
+readStateStrict m = castPtrToStablePtr <$> peekByteOff m stateOffset
+
 writeState :: Ptr MetaData -> StablePtr (IORef BuildRState) -> IO ()
 writeState m = pokeByteOff m stateOffset . castStablePtrToPtr
 
@@ -436,6 +439,14 @@ data SealedState = SealedState
       -- but please be sure to update the "space" metadatum.
   }
 
+data SealedStateStrict = SealedStateStrict
+  { sealedSB'   :: B.ByteString
+  , totalSB'    :: {-# UNPACK #-}!Int
+  , stateVarSB' :: {-# UNPACK #-}!(IORef BuildRStateStrict)
+  , statePtrSB' :: {-# UNPACK #-}!(StablePtr (IORef BuildRStateStrict))
+  , recycledSB' :: Maybe (P.MutableByteArray RealWorld)
+  }
+
 -- | Takes ownership of the current buffer,
 -- but sometimes hands it back for reuse.
 --
@@ -459,6 +470,20 @@ sealBuffer (Ptr addr) (I# u) = IO $ \s0 ->
            , stateVarSB = IORef (STRef stateVar)
            , statePtrSB = StablePtr statePtr
            , recycledSB = recycled
+           }
+       #)
+
+sealBufferStrict :: Ptr Word8 -> Int -> IO SealedStateStrict
+sealBufferStrict (Ptr addr) (I# u) = IO $ \s0 ->
+  case sealBufferStrict# addr u s0 of
+    (# s1, sealed, total, stateVar, statePtr, recycled #) ->
+      (# s1
+       , SealedStateStrict
+           { sealedSB'   = sealed
+           , totalSB'    = I# total
+           , stateVarSB' = IORef (STRef stateVar)
+           , statePtrSB' = StablePtr statePtr
+           , recycledSB' = recycled
            }
        #)
 
@@ -509,6 +534,46 @@ sealBuffer# addr unused s0 =
             then finish untrimmed Nothing
             else finish (B.copy untrimmed) (Just buffer)
 
+sealBufferStrict# ::
+  Addr# ->
+  Int# ->
+  State# RealWorld ->
+  (# State# RealWorld
+   , B.ByteString
+   , Int#
+   , MutVar# RealWorld BuildRStateStrict
+   , StablePtr# (IORef BuildRStateStrict)
+   , Maybe (P.MutableByteArray RealWorld)
+   #)
+sealBufferStrict# addr unused s0 =
+    case go s0 of
+      (# s1, (sealed, I# total, IORef (STRef sv), StablePtr sp, re) #) ->
+        (# s1, sealed, total, sv, sp, re #)
+  where
+    IO go = do
+      let v = Ptr addr
+      statePtr <- readStateStrict (metaPtr v (I# unused))
+      stateVar <- deRefStablePtr statePtr
+      BuildRStateStrict { currentBuffer' = buffer, sealedBuffers' = oldSealed } <-
+       readIORef stateVar
+      total <- readTotal v (I# unused)
+      let allocation = P.sizeofMutableByteArray buffer - metaDataSize
+      if allocation <= I# unused
+        then
+          pure (oldSealed, total, stateVar, statePtr, Just buffer)
+        else do
+          let !(PTR base) = P.mutableByteArrayContents buffer
+              !(P.MutableByteArray mba) = buffer
+              fp = ForeignPtr base (PlainPtr mba)
+              offset = metaDataSize + I# unused
+              finish trimmed recycled = do
+                let !newSealed = B.append trimmed oldSealed
+                pure (newSealed, total, stateVar, statePtr, recycled)
+              untrimmed = BI.fromForeignPtr fp offset (allocation - I# unused)
+          if offset <= B.length untrimmed
+            then finish untrimmed Nothing
+            else finish (B.copy untrimmed) (Just buffer)
+
 -- | Like `Proto3.Wire.Reverse.toLazyByteString` but also
 -- returns the total length of the lazy 'BL.ByteString',
 -- which is computed as a side effect of encoding.
@@ -529,8 +594,8 @@ runBuildRStrict f = unsafePerformIO $ do
     let u0 = smallChunkSize
     v0 <- newBufferStrict B.empty 0 stateVar statePtr u0
     (v1, u1) <- fromBuildR f v0 u0
-    SealedState { sealedSB = bytes, totalSB = total } <- sealBuffer v1 u1
-    pure (total, BL.toStrict bytes)
+    SealedStateStrict { sealedSB' = bytes, totalSB' = total } <- sealBufferStrict v1 u1
+    pure (total, bytes)
 
 -- | First reads the number of unused bytes in the current buffer.
 withUnused :: (Int -> BuildR) -> BuildR
