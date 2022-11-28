@@ -1,3 +1,4 @@
-resolver: lts-14.1
+resolver: lts-19.0
+
 extra-deps:
-  - parameterized-0.5.0.0@sha256:880717fbb958de1bac015f0a375ab6636f162a72483d987a11e305da6fac6c97,1969
+  - word-compat-0.0.2
