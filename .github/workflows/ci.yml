@@ -9,13 +9,25 @@ jobs:
   nix-build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macOS-latest]
+        os:
+          - ubuntu-latest
+          - macos-latest
+
     runs-on: ${{ matrix.os }}
+
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3.5.3
         name: Checkout
-      - uses: cachix/install-nix-action@v13
+
+      - uses: cachix/install-nix-action@v22
         name: Install Nix
+
+      - uses: cachix/cachix-action@v12
+        name: Set up Cachix
+        with:
+          name: awakesecurity
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
       - run: nix-build
 
   cabal-build:
@@ -35,3 +47,41 @@ jobs:
           cabal-version: ${{ matrix.cabal }}
       - run: |
           cabal build --enable-tests && cabal test
+
+  stack-build:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        ghc:
+          - 9.2.8
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3.5.3
+
+      - name: Setup Haskell
+        uses: haskell/actions/setup@v2.4.3
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          enable-stack: true
+          stack-version: 2.11
+
+      - name: Cache dependencies
+        uses: actions/cache@v3.3.1
+        with:
+          path: ~/.stack
+          key: ${{ runner.os }}-${{ matrix.ghc }}-stack
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.ghc }}-stack
+
+      - name: Build
+        run: stack build --system-ghc
+
+      - name: Test
+        run: stack test --system-ghc
+        # Test fails with ld warnings on macos-stack combo
+        continue-on-error: ${{ matrix.os == 'macos-latest' }}

@@ -1,3 +1,6 @@
+{-# LANGUAGE DeriveDataTypeable         #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE DeriveLift                 #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 {-
@@ -26,24 +29,28 @@ module Proto3.Wire.Types
     , WireType(..)
     ) where
 
-import           Control.DeepSeq ( NFData )
-import           Data.Hashable   ( Hashable )
-import           Data.Word       ( Word64 )
-import           Test.QuickCheck ( Arbitrary(..), choose )
+import           Control.DeepSeq            ( NFData )
+import           Data.Data                  ( Data )
+import           Data.Hashable              ( Hashable )
+import           Data.Word                  ( Word64 )
+import           GHC.Generics               ( Generic )
+import           Language.Haskell.TH.Syntax ( Lift )
+import           Test.QuickCheck            ( Arbitrary(..), choose )
 
 -- | A 'FieldNumber' identifies a field inside a protobufs message.
 --
 -- This library makes no attempt to generate these automatically, or even make
 -- sure that field numbers are provided in increasing order. Such things are
 -- left to other, higher-level libraries.
-newtype FieldNumber = FieldNumber { getFieldNumber :: Word64 }
-    deriving (Eq, Ord, Enum, Hashable, NFData, Num)
+newtype FieldNumber = FieldNumber
+  { getFieldNumber :: Word64 }
+  deriving (Bounded, Data, Enum, Eq, Generic, Hashable, Lift, NFData, Num, Ord)
 
 instance Show FieldNumber where
-    show (FieldNumber n) = show n
+  show (FieldNumber n) = show n
 
 instance Arbitrary FieldNumber where
-  arbitrary = fmap FieldNumber $ choose (1, 536870911)
+  arbitrary = FieldNumber <$> choose (1, 536870911)
 
 -- | Create a 'FieldNumber' given the (one-based) integer which would label
 -- the field in the corresponding .proto file.
@@ -52,5 +59,9 @@ fieldNumber = FieldNumber
 
 -- | The (non-deprecated) wire types identified by the Protocol
 -- Buffers specification.
-data WireType = Varint | Fixed32 | Fixed64 | LengthDelimited
-    deriving (Show, Eq, Ord)
+data WireType
+  = Varint
+  | Fixed32
+  | Fixed64
+  | LengthDelimited
+  deriving (Bounded, Data, Enum, Eq, Generic, Lift, Ord, Show)

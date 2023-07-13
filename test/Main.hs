@@ -27,13 +27,16 @@ import           Control.Monad         ( guard, void )
 import           Control.Monad.Trans.State ( StateT(..) )
 import qualified Data.Bits             as Bits
 import qualified Data.ByteString       as B
+import qualified Data.ByteString.Builder.Extra as BB
 import qualified Data.ByteString.Lazy  as BL
+import qualified Data.ByteString.Short as BS
 import qualified Data.ByteString.Builder.Internal as BBI
 import           Data.Either           ( isLeft )
 import           Data.Maybe            ( fromMaybe )
 import           Data.Int
-import           Data.List             ( group )
-import qualified Data.Text             as TS
+import           Data.List             ( group, sort )
+import qualified Data.Text             as T
+import qualified Data.Text.Short       as TS
 import qualified Data.Vector           as V
 import           Data.Word             ( Word8, Word64 )
 import           Foreign               ( sizeOf )
@@ -57,6 +60,7 @@ main = do
     Test.DocTest.doctest $
       [ "-isrc"
       , "-fobject-code"
+      , "-Wno-warnings-deprecations"
       , "src/Proto3/Wire/Builder.hs"
       , "src/Proto3/Wire/Reverse.hs"
       , "src/Proto3/Wire/Encode.hs"
@@ -76,11 +80,11 @@ tests = testGroup "Tests" [ roundTripTests
                           , decodeWireRoundTrip
                           ]
 
-data StringOrInt64 = TString TS.Text | TInt64 Int64
+data StringOrInt64 = TString T.Text | TInt64 Int64
     deriving (Show,Eq)
 
 instance QC.Arbitrary StringOrInt64 where
-    arbitrary = QC.oneof [ TString . TS.pack <$> QC.arbitrary, TInt64 <$> QC.arbitrary ]
+    arbitrary = QC.oneof [ TString . T.pack <$> QC.arbitrary, TInt64 <$> QC.arbitrary ]
 
 -- This just stress tests the fancy varint encodings with more randomness.
 varIntHeavyTests :: TestTree
@@ -131,8 +135,27 @@ roundTripTests = testGroup "Roundtrip tests"
                                        (Encode.bool (fieldNumber 1))
                                        (one Decode.bool False `at` fieldNumber 1)
                            , roundTrip "text"
-                                       (Encode.text (fieldNumber 1) . TS.pack)
-                                       (one (fmap TS.unpack Decode.text) mempty `at`
+                                       (Encode.text (fieldNumber 1) . T.pack)
+                                       (one (fmap T.unpack Decode.text) mempty `at`
+                                            fieldNumber 1)
+                           , roundTrip "shortText"
+                                       (Encode.shortText (fieldNumber 1) . TS.pack)
+                                       (one (fmap TS.unpack Decode.shortText) mempty `at`
+                                            fieldNumber 1)
+                           , roundTripFor (QC.oneof [QC.arbitrary, genManyOctets])
+                                       "byteString"
+                                       (Encode.byteString (fieldNumber 1) . B.pack)
+                                       (one (fmap B.unpack Decode.byteString) mempty `at`
+                                            fieldNumber 1)
+                           , roundTripFor genLazyByteString
+                                       "lazyByteString"
+                                       (Encode.lazyByteString (fieldNumber 1))
+                                       (one (Decode.lazyByteString) mempty `at`
+                                            fieldNumber 1)
+                           , roundTripFor (QC.oneof [QC.arbitrary, genManyOctets])
+                                       "shortByteString"
+                                       (Encode.shortByteString (fieldNumber 1) . BS.pack)
+                                       (one (fmap BS.unpack Decode.shortByteString) mempty `at`
                                             fieldNumber 1)
                            , roundTrip "embedded"
                                        (Encode.embedded (fieldNumber 1) .
@@ -226,14 +249,35 @@ roundTrip :: (Show a, Eq a, Arbitrary a)
           -> (a -> Encode.MessageBuilder)
           -> Decode.Parser Decode.RawMessage a
           -> TestTree
-roundTrip name encode decode =
-    QC.testProperty name $
-        \x -> do
-            let bytes = Encode.toLazyByteString (encode x)
+roundTrip = roundTripFor QC.arbitrary
+
+roundTripFor :: (Show a, Eq a)
+             => QC.Gen a
+             -> String
+             -> (a -> Encode.MessageBuilder)
+             -> Decode.Parser Decode.RawMessage a
+             -> TestTree
+roundTripFor gen name encode decode =
+    QC.testProperty name $ QC.forAll gen $
+        \x ->
+            let bytes = Encode.toLazyByteString (encode x) in
             case Decode.parse decode (BL.toStrict bytes) of
                 Left _ -> error "Could not decode encoded message"
                 Right x' -> x === x'
 
+genManyOctets :: QC.Gen [Word8]
+genManyOctets =
+  QC.vector =<< QC.choose (BB.smallChunkSize - 64, BB.smallChunkSize + 64)
+
+genLazyByteString :: QC.Gen BL.ByteString
+genLazyByteString = do
+  octets <- genManyOctets
+  let total = length octets
+  splits <- QC.listOf (QC.choose (0, total))
+  let go :: Int -> [Int] -> [Word8] -> [[Word8]]
+      go x [] os = [take (total - x) os]
+      go x (y : ys) os = let (o1, o2) = splitAt (y - x) os in o1 : go y ys o2
+  pure $ BL.fromChunks $ map B.pack $ go 0 (sort splits) octets
 
 decodeWireRoundTrip :: TestTree
 decodeWireRoundTrip = QC.testProperty "decodeWire round trips" $
